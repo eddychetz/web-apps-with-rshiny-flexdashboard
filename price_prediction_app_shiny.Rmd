@@ -1,0 +1,306 @@
+---
+title: "Sales Demand Forecast App"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    vertical_layout: fill
+    source_code: "https://github.com/eddychetz/web-apps-with-shiny.git"
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+# App
+library(flexdashboard)
+library(shiny)
+library(shinyjs)
+library(shinyWidgets)
+library(reactable) # interactive HTML tables
+library(palmerpenguins)
+library(paletteer)
+library(cranlogs)
+library(fontawesome)
+
+# Core
+library(tidyverse)
+library(tidyquant)
+
+# Excel Files
+library(readxl)
+library(writexl)
+
+# Visualization
+library(plotly)
+library(choroplethr)
+library(choroplethrMaps)
+
+# Modeling
+library(tidymodels)
+
+# Database
+library(odbc)
+library(RSQLite)
+```
+
+```{r eval=FALSE}
+
+# LOAD DATA
+
+# 2.0 Importing Files ----
+
+bikes_tbl <- read_excel("./bikes.xlsx")
+
+bikeshops_tbl <- read_excel("./bikeshops.xlsx")
+
+orderlines_tbl <- read_excel("./orderlines.xlsx")
+
+# 3.0 Examining Data ----
+
+bikes_tbl
+
+glimpse(bikes_tbl)
+
+glimpse(orderlines_tbl)
+
+# 4.0 Joining Data ----
+
+orderlines_tbl
+
+bikeshops_tbl
+
+left_join(orderlines_tbl,bikes_tbl, by = c("product.id"="bike.id"))
+
+bike_orderlines_joined_tbl <-orderlines_tbl %>% 
+    left_join(bikes_tbl, by = c("product.id"="bike.id"))%>%
+    left_join(bikeshops_tbl, by = c("customer.id"="bikeshop.id"))
+
+bike_orderlines_joined_tbl %>% 
+    glimpse()
+
+
+# 5.0 Wrangling Data ----
+
+bike_orderlines_wrangled_tbl <- bike_orderlines_joined_tbl %>%
+    
+    # Separate the description field into category.1, category.2, and frame.material
+    separate(description,
+             into = c("category.1","category.2","frame.material"),
+             sep = " - ",
+             remove = TRUE)%>%
+    
+    # Separate location into city and state
+    separate(location,
+             into = c("city","state"),
+             sep = ",",
+             remove = FALSE) %>%
+    
+    # price extended
+    mutate(total.price = price*quantity)%>%
+    
+    # Reorganize
+    select(-...1,-location)%>%
+    select(-ends_with(".id"))%>%
+    
+    # Getting The Order ID Column Back: bind_cols()
+    bind_cols(bike_orderlines_joined_tbl %>% select(order.id))%>%
+    
+    #Reordering Columns: select()
+    select(contains("date"), contains("id"), contains("order"), 
+           quantity, price, total.price,everything())%>%
+    
+    # Renaming Columns: rename()
+    rename(order_date = order.date)%>%
+    
+    # Renaming Columns: set_names()
+    set_names(names(.) %>% str_replace_all("\\.","_"))
+
+bike_orderlines_wrangled_tbl %>% glimpse()
+sales_by_year_tbl <- bike_orderlines_wrangled_tbl %>% 
+    
+    # Selecting columns to focus and adding year column
+    select(order_date, total_price) %>%
+    mutate(year = year(order_date)) %>%
+    
+    # Grouping by year and summarizing sales
+    group_by(year) %>%
+    summarize(sales = sum(total_price)) %>%
+    ungroup() %>%
+    
+    # $ Format text
+    mutate(sales_text = scales::dollar(sales))
+write_csv(sales_by_year_tbl, "sales_by_year_tbl.csv")
+
+# 6.2 Sales by Year and Category 2 ----
+
+
+# Step 1 - Manipulate
+sales_by_year_cat_2_tbl <- bike_orderlines_wrangled_tbl %>%
+    
+    # Selecting columns and add a year
+    select(order_date, total_price, category_2)%>%
+    mutate(year = year(order_date))%>%
+    
+    # Group by and summarize year and category 2
+    group_by(year, category_2)%>%
+    summarize(sales = sum(total_price))%>%
+    ungroup()%>%
+    
+    # Format $ text
+    mutate(sales_text = scales::dollar(sales))
+
+write_csv(sales_by_year_cat_2_tbl, "sales_by_year_cat_2_tbl.csv")
+```
+
+# Sidebar {.sidebar}
+
+##### **Date Range**
+
+```{r}
+bikes <- read_excel("./bikes.xlsx")
+
+dateRangeInput(inputId = "date",
+               label = "",
+                 start = Sys.Date()-10,
+                 end = Sys.Date()+10)
+```
+
+##### **Bike Type**
+
+```{r}
+
+selectInput(inputId = "grp", 
+            label = "", 
+            choices = unique(bikes$category_1), 
+            selected = "Mountain", 
+            multiple = F, selectize = T)
+```
+
+##### **Bike Family**
+
+```{r}
+selectInput(inputId = "sub-grp", 
+            label = "", 
+            choices = unique(bikes$category_2),
+            selected = "Mountain",
+            multiple = F, selectize = T)
+```
+
+##### **Bike Shop (Customer)**
+
+```{r}
+selectInput(inputId = "customer", 
+            label = "",
+            choices = unique(bikes$bikeshop_name),
+            selected = "setosa",
+            multiple = F, selectize = T)
+```
+
+##### **Forecast Mode**
+
+```{r}
+
+```
+
+------------------------------------------------------------------------
+
+```{r}
+fluidRow(
+            column(5, 
+                   # actionButton(inputId = "apply", 
+                   #              label = "Apply", 
+                   #              class = "btn-info", 
+                   #              icon = icon("play")),
+                   submitButton("Apply", icon("play"))),
+            column(5, 
+                   # actionButton(inputId = "reset", 
+                   #              label = "Reset", 
+                   #              class = "btn-info", 
+                   #              icon = icon("fa-reset")),
+                   submitButton("Reset", icon("rotate")))
+                )
+```
+
+```{r}
+
+```
+
+------------------------------------------------------------------------
+
+```{r}
+submitButton("Learn Shiny", icon("graduation-cap"))
+```
+
+# Business Insights
+
+## Row
+
+### Orders {.value-box}
+
+```{r}
+renderValueBox({
+    valueBox(100, icon = "fa-tag", color = "teal")
+})
+```
+
+### Sales {.value-box}
+
+```{r}
+renderValueBox({
+    valueBox(1500, icon = "fa-random", color = "teal")
+})
+```
+
+### Ratio, Mountain to Road {.value-box}
+
+```{r}
+#valueBoxOutput(outputId= "", width = "100%", height = "160px")
+renderValueBox({
+    valueBox(100, icon = "fa-tag", color = "teal")
+})
+```
+
+## Row
+
+### By State
+
+##### Revenue by Year and Category 2
+
+```{r}
+# Step 2 - Visualize
+write_csv(bike_orderlines_wrangled_tbl, "./bike_orderlines_wrangled_tbl.csv")
+
+bike_orderlines_wrangled_tbl <- read_csv("./bike_orderlines_wrangled_tbl.csv")
+
+# state_choropleth(bike_orderlines_wrangled_tbl[, c("city","state", "total_price")],
+#                  title = "Distr by State",
+#                  legend = "Bike Sales")
+```
+
+### Over Time
+
+##### Revenue by Year
+
+```{r}
+# Step 2 - Visualize
+sales_by_year_tbl <- read_csv("./sales_by_year_tbl.csv")
+sales_by_year_tbl %>%
+    
+    # Setup canvas with year (x-axis) and sales (y-axis)
+    ggplot(aes(x=year, y=sales))+
+    
+    # Geometries
+    geom_col(fill="#2C3E50")+
+    geom_label(aes(label = sales_text))+
+    geom_smooth(method = "lm", se = FALSE)+
+    
+    # Formatting
+    theme_tq()+
+    scale_y_continuous(labels = scales::dollar)+
+    labs(
+        title = "",
+        subtitle = "Upward trend",
+        x = "",
+        y = "Revenue"
+    )
+```
