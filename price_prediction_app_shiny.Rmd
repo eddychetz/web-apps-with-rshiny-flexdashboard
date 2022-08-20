@@ -45,7 +45,7 @@ library(RSQLite)
 
 ```{r eval=FALSE}
 
-# LOAD DATA
+# LOAD DATA --
 
 # 2.0 Importing Files ----
 
