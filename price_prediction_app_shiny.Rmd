@@ -150,6 +150,10 @@ sales_by_year_cat_2_tbl <- bike_orderlines_wrangled_tbl %>%
     mutate(sales_text = scales::dollar(sales))
 
 write_csv(sales_by_year_cat_2_tbl, "sales_by_year_cat_2_tbl.csv")
+
+write_csv(bike_orderlines_wrangled_tbl, "./bike_orderlines_wrangled_tbl.csv")
+
+bike_orderlines_wrangled_tbl <- read_csv("./bike_orderlines_wrangled_tbl.csv")
 ```
 
 # Sidebar {.sidebar}
@@ -268,9 +272,7 @@ renderValueBox({
 
 ```{r}
 # Step 2 - Visualize
-write_csv(bike_orderlines_wrangled_tbl, "./bike_orderlines_wrangled_tbl.csv")
 
-bike_orderlines_wrangled_tbl <- read_csv("./bike_orderlines_wrangled_tbl.csv")
 
 # state_choropleth(bike_orderlines_wrangled_tbl[, c("city","state", "total_price")],
 #                  title = "Distr by State",
