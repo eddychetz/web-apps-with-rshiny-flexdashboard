@@ -1,0 +1,377 @@
+---
+title: "Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    logo: 
+    theme: flatly
+    social: [ "linkedin", "facebook", "twitter", "menu" ]
+    source_code: "https://github.com/eddychetz/web-apps-with-rshiny-flexdashboard.git"
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(rpivotTable) # for pivotal tables
+library(DT) # for data tables
+library(ggplot2)
+library(plotly)
+library(correlationfunnel)
+library(tidyquant)
+library(tidyverse)
+library(openintro) # deal with abbreviations
+library(highcharter) # maps
+library(ggvis) # visualization
+library(rpart) # partition and pre-processing
+library(caret) # Regression and classification
+library(dummy) # convert factor to dummy vars
+
+library(janitor) # Clean names
+library(tidymodels) # Modeling
+
+churn_tbl <- read_csv("./data/customer_churn.csv")
+
+mycolors <- c("blue", "#FFC125", "darkgreen", "darkorange")
+
+# DATA ----
+customer_churn_tbl <- churn_tbl %>%
+    # Clean names
+    clean_names()%>%
+    # Casting categorical columns
+    mutate_if(is.character, as_factor)
+customer_churn_tbl%>%glimpse()
+
+# MODEL ----
+
+# pre-processing pipeline
+recipe_spec <- recipe(churn ~ ., 
+                      data = customer_churn_tbl) %>%
+    # Remove irrelevant columns
+    step_rm(customer_id) %>%
+    # Encode cat features
+    step_dummy(all_nominal_predictors(), 
+               one_hot = TRUE)
+
+recipe_spec %>% 
+    prep() %>% 
+    bake(customer_churn_tbl)
+
+# model specification
+model_spec <- rand_forest(
+    trees = 200, 
+    min_n = 5)%>%  
+    set_mode("classification")%>%
+    set_engine("randomForest")
+
+# Model training pipeline
+wflw_fit_rf <- workflow() %>%
+    add_recipe(recipe_spec) %>%
+    add_model(model_spec) %>%
+    fit(customer_churn_tbl)
+
+# Class prediction
+wflw_fit_rf %>% 
+    predict(customer_churn_tbl)
+
+
+pred_prob <- wflw_fit_rf %>%
+    predict(customer_churn_tbl, type = "prob")
+
+# Testing the function
+pred <- wflw_fit_rf %>%
+    predict(customer_churn_tbl)
+
+# Model evaluation
+churn_tab <- table(customer_churn_tbl$churn, pred$.pred_class)
+
+cm <- confusionMatrix(churn_tab, mode = "prec_recall")
+
+#EXPLAINER
+
+# Custom prediction function
+pred_func <- function(model, newdata) {
+    predict(model, 
+            newdata, 
+            type = "prob"
+            ) %>% 
+        pull(2)
+}
+explain_rf <- DALEX::explain(
+    model            = wflw_fit_rf,
+    data             = customer_churn_tbl %>% select(-churn),
+    y                = as.numeric(customer_churn_tbl$churn),
+    predict_function = pred_func,
+    label            = "Random Forest"
+)
+```
+
+Interactive Data Visualization {data-icon="fa-signal"}
+=======================================================
+
+Row {data-height="100" .sidebar}
+----------------------------------------
+
+#### **Customer Churn**
+
+* Customer churn varies significantly by __contract type__.
+
+* A potential strategy is to encourage purchasing long-term contracts versus month-to-month. 
+
+```{r}
+shiny::sliderInput("n_breaks", label = "Numeric Features:",
+              min = 2, max = 8, value = 4, step = 1)
+```
+
+```{r}
+
+shiny::selectInput("chart_type", label = "Chart Type:", 
+                     choices = c("Aggregated", "Customer-Level"))
+
+```
+
+Row {data-height="650"}
+------------------------------
+
+
+```{r}
+# data("USArrests", package = "datasets")
+# data("usgeojson")
+# 
+# USArrests <- mutate(USArrests, state = rownames(USArrests))
+# 
+# p1 <- highchart() %>%
+#   hc_title(text = "Violent Crime Rates by US State") %>%
+#   hc_subtitle(text = "Source: USArrests data") %>%
+#   hc_add_series_map(usgeojson, USArrests,
+#     name = "Murder arrests (per 100,000)",
+#     value = "Murder", joinBy = c("woename", "state"),
+#     dataLabels = list(
+#       enabled = TRUE,
+#       format = "{point.properties.postalcode}"
+#     )
+#   ) %>%
+#   hc_colorAxis(stops = color_stops()) %>%
+#   hc_legend(valueDecimals = 0, valueSuffix = "%") %>%
+#   hc_mapNavigation(enabled = TRUE)
+# p1
+```
+
+### **Feature Importance**
+
+```{r}
+output$g1 <- renderPlot({
+   customer_churn_tbl %>%
+    select(-customer_id) %>%
+    # #mutate(TotalCharges = ifelse(is.na(TotalCharges), 0, TotalCharges)) %>%
+    # replace_na(replace = list(TotalCharges = 0)) %>%
+    # binarize(n_bins = input$n_breaks,
+    #          thresh_infreq = 0.05, 
+    #          one_hot = F) %>%
+    #     
+    # correlate(target = churn__Yes) %>%
+    #     
+    # plot_correlation_funnel(interactive = T) +
+    # geom_point(size = 3, alpha = 0.7, color = palette_light()[1])
+    binarize(n_bins = input$n_breaks) %>%
+    correlate(churn__Yes) %>%
+    plot_correlation_funnel()
+
+})
+plotOutput("g1", height = "80%")
+br()
+```
+
+### **Contract Type Effect**
+
+```{r}
+
+output$p1 <- renderPlotly({
+  
+  if (input$chart_type == "Aggregated") {
+    g <- customer_churn_tbl %>%
+      select(contract, churn) %>%
+      count(contract, churn) %>%
+      group_by(contract) %>%
+      mutate(prop = n / sum(n)) %>%
+      ungroup() %>%
+      mutate(contract = as_factor(contract) %>% fct_reorder(prop) %>% fct_rev()) %>%
+      filter(churn == 'Yes') %>%
+      ggplot(aes(prop, contract)) +
+      geom_col(aes(text = str_glue("Churn %: {scales::percent(prop)}")), 
+               fill = palette_light()[1]) +
+      scale_x_continuous(labels = scales::percent_format()) +
+      theme_tq() 
+  } else {
+    g <- customer_churn_tbl %>%
+      mutate(value = ifelse(churn == 'Yes', 1, 0)) %>%
+      mutate(contract = factor(contract, 
+                               levels = c("Month-to-month", "One year", "Two year"))) %>%
+      ggplot(aes(value, contract, color = churn)) +
+      geom_jitter((aes(text = str_glue({
+        "Customer ID: {customer_id}
+        Contract: {contract}
+        Tenure: {tenure}"
+      }))), 
+                  alpha = 0.5) +
+      scale_color_tq() +
+      scale_x_continuous(breaks = c(0,1)) +
+      theme_gray() +
+      labs(x = "Churn Numeric (Yes = 1, No = 0)")
+  }
+  
+   ggplotly(g)
+})
+plotlyOutput("p1", height = "80%")
+```
+
+<!-- Row {data-height=50} -->
+<!-- ------------------------------ -->
+<!-- **Hello* -->
+
+
+Data Table {data-icon="fa-table"}
+==============================================
+
+```{r}
+datatable(churn_tbl,
+          caption = T,
+          filter = "top",
+          options = list(pageLength = 10))
+```
+
+Pivot Table {data-icon="fa-solid fa-table-pivot"}
+================================================
+
+```{r}
+rpivotTable(churn_tbl[,2:5],
+            aggregatorName = "Count",
+            cols = "Contract",
+            rows = "Churn",
+            rendererName = "Heatmap")
+
+```
+
+Data Analysis {data-icon="fa-magnifying-glass-chart"}
+================================================
+
+Row {data-height=250, .sidebar}
+-----------------------
+
+**Model Parameters**
+
+```{r}
+shiny::selectInput("model_type", label = "Model Selection:", 
+                     choices = c("Random Forest", "XGBoost"))
+```
+
+Row {data-height=250}
+-----------------------
+
+### Model Accuracy
+
+```{r}
+
+renderValueBox({
+    #churn <- filter(churn_tbl, gender == "Male")
+    valueBox(paste(round(cm$overall[1]*100, digits = 2), "%"), 
+         icon = "fa-user")
+})
+```
+
+### Precision
+
+```{r}
+renderValueBox({
+    #churn <- filter(churn_tbl, gender == "Male")
+    valueBox(paste(round(cm$byClass[5]*100, digits = 2), "%"), 
+         icon = "fa-user")
+})
+```
+
+### Recall
+
+```{r}
+renderValueBox({
+    #churn <- filter(churn_tbl, gender == "Male")
+    valueBox(paste(round(cm$byClass[6]*100, digits = 2), "%"), 
+         icon = "fa-user")
+})
+```
+
+
+Row {data-height="250"}
+-----------------------
+```{r}
+# EXPLAINABLE AI REPORT ----
+
+# Custom prediction function
+pred_func <- function(model, newdata) {
+    predict(model, 
+            newdata, 
+            type = "prob"
+            ) %>% 
+        pull(2)
+}
+
+# Information to display
+output$p3 <- renderTable({
+    
+        tabl <- DALEX::model_performance(explain_rf)
+        tabl$measures
+})
+tableOutput("p3")
+```
+
+Row {data-height="650"}
+------------------------------
+
+### Hello classification model
+
+
+Summary {data-orientation=columns}
+================================================
+
+```{r}
+# gauge(round((1-(churn_tbl%>%
+#                     select(contains("month"))%>%
+#                     sum(churn_tbl$Churn == "Yes")/length(churn_tbl$Churn)))*100, 
+#             digits = 1),
+#             min = 0,
+#             max = 100,
+#       symbol = "%",
+#             gaugeSectors(success = c(0, 25),
+#                          warning = c(25, 70),
+#                          danger = c(70, 100),
+#                          colors = c("green", "yellow", "red")))
+```
+
+**Report**
+
+* This is a report on `r length(churn_tbl$tenure)` customers.
+
+
+ **Problem**
+
+* Customer Churn is impacting revenue sales. What can we do?
+
+
+ **Solution**
+
+
+* Customer churn varies significantly by __contract type__.
+
+* A potential strategy is to encourage purchasing long-term contracts versus month-to-month. 
+
+* My analysis suggests that we can __reduce churn by moving customers to longer term contracts.__
+
+
+This report was generated on `r Sys.Date()`.
+
+About {data-icon="fa-user"}
+=============================
+
+**Created by:** Data Scientist, [Eddwin Cheteni](https://mlaihub.netlify.app/)
+
+**Confidential:** HIGHLY!
